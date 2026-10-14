@@ -3,3 +3,59 @@ title: "AI Legal Analysis Part 2"
 author: "blank"
 format: pdf
 ---
+Lili: research question, exploratory analysis, and decision tree
+Elizabeth: random forest, model comparison, and conclusions
+
+```{r}
+library(readr)
+library(tidyverse);library(rpart);library(rpart.plot)
+library(randomForest)
+hallucination_cases<- read.csv("hallucination_cases.csv")
+library(ggplot2)
+```
+
+```{r}
+view(hallucination_cases)
+```
+
+```{r}
+table(hallucination_cases$Vendor.Disputed)
+```
+
+
+Research Question: Are there characteristics of AI hallucination cases that can predict whether a professional sanction is imposed on the case by some sort of regulatory agency?
+
+```{r}
+ggplot(hallucination_cases,
+       aes(x = Legal.Field.Primary, fill = Professional.Sanction)) +
+  geom_bar(position = "dodge") +
+  labs(
+    title = "Professional Sanctions by Legal Field",
+    x = "Primary Legal Field",
+    y = "Number of Cases",
+    fill = "Professional Sanction"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+hallucinations <- hallucination_cases |>
+  select(Professional.Sanction, Vendor.Disputed, Legal.Field.Primary, Court, AI.Tool) |>
+  mutate(
+    Professional.Sanction = as.factor(Professional.Sanction),
+    Legal.Field.Primary = as.factor(Legal.Field.Primary),
+    Court = as.factor(Court),
+    AI.Tool = as.factor(AI.Tool),
+    Vendor.Disputed = as.factor(Vendor.Disputed)
+  )
+set.seed(154)
+train_id <- sample(1:nrow(hallucinations), round(0.8 * nrow(hallucinations)))
+hallucinations_train <-  hallucinations[train_id, ]
+hallucinations_test <-  hallucinations[-train_id, ]
+hallucinations_fit <-  rpart(Professional.Sanction ~ Legal.Field.Primary + Court + Vendor.Disputed, data = hallucinations_train)
+summary(hallucinations_fit)
+rpart.plot(hallucinations_fit)
+```
+Interpretation: Based on the first node, we see that "No" is the most common category of professional sanctions in the training data. Then, the first split separates cases according to their court categories, followed by a split according to primary legal field, then again court in the last split. This suggests that court jurisdiction and legal fields may hold some predictive power in distinguishing between cases who receive a professional sanction and those who don't, while vendor disputed seems to be an irrelevant predictor. Some of the nodes, like "No" containing approximately one percent of the data, have predicted probabilities relatively close to the classification threshold. This particular node has a 38 percent chance of a "Yes" outcome, which suggests lower predictive power or a relatively large margin of error. The small proportion of cases reaching this last node also means its prediction is based on a relatively small subset of the training data.
