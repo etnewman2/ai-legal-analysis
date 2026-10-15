@@ -14,9 +14,7 @@ hallucination_cases<- read.csv("hallucination_cases.csv")
 library(ggplot2)
 ```
 
-```{r}
-view(hallucination_cases)
-```
+
 
 ```{r}
 table(hallucination_cases$Vendor.Disputed)
@@ -42,7 +40,7 @@ ggplot(hallucination_cases,
 
 ```{r}
 hallucinations <- hallucination_cases |>
-  select(Professional.Sanction, Vendor.Disputed, Legal.Field.Primary, Court, AI.Tool) |>
+  select(Professional.Sanction, Vendor.Disputed, Legal.Field.Primary, Court, AI.Tool, State.s.) |>
   mutate(
     Professional.Sanction = as.factor(Professional.Sanction),
     Legal.Field.Primary = as.factor(Legal.Field.Primary),
@@ -50,6 +48,27 @@ hallucinations <- hallucination_cases |>
     AI.Tool = as.factor(AI.Tool),
     Vendor.Disputed = as.factor(Vendor.Disputed)
   )
+
+hallucinations <- hallucinations|>
+  filter(!is.na(`State.s.`)) |>
+  mutate(
+    country_group = if_else(
+      `State.s.` %in% c("Australia", "Canada", "Israel", "UK", "USA"),
+      `State.s.`,
+      "Other"
+    )
+  )
+hallucinations <- hallucinations |>
+  filter(!is.na(`AI.Tool`)) %>%
+  mutate(
+    ai_tool_group = case_when(
+      `AI.Tool` == "Unidentified" ~ "Unidentified",
+      `AI.Tool` == "Implied" ~ "Implied",
+      `AI.Tool` == "implied" ~ "Implied",
+      TRUE ~ "Specific AI Tool"
+    )
+  )
+
 set.seed(154)
 train_id <- sample(1:nrow(hallucinations), round(0.8 * nrow(hallucinations)))
 hallucinations_train <-  hallucinations[train_id, ]
@@ -57,5 +76,135 @@ hallucinations_test <-  hallucinations[-train_id, ]
 hallucinations_fit <-  rpart(Professional.Sanction ~ Legal.Field.Primary + Court + Vendor.Disputed, data = hallucinations_train)
 summary(hallucinations_fit)
 rpart.plot(hallucinations_fit)
+
+
+
 ```
 Interpretation: Based on the first node, we see that "No" is the most common category of professional sanctions in the training data. Then, the first split separates cases according to their court categories, followed by a split according to primary legal field, then again court in the last split. This suggests that court jurisdiction and legal fields may hold some predictive power in distinguishing between cases who receive a professional sanction and those who don't, while vendor disputed seems to be an irrelevant predictor. Some of the nodes, like "No" containing approximately one percent of the data, have predicted probabilities relatively close to the classification threshold. This particular node has a 38 percent chance of a "Yes" outcome, which suggests lower predictive power or a relatively large margin of error. The small proportion of cases reaching this last node also means its prediction is based on a relatively small subset of the training data.
+
+```{r}
+#Checking how many values of Court there are
+#hallucinations |> 
+  #count(Court)
+```
+Because of the number of values of Court, it will need to be excluded from the model. 
+
+
+```{r}
+#checking legal fields 
+hallucinations%>%
+  count(`Legal.Field.Primary`)
+```
+
+We can however, include Primary Legal Field. 
+
+
+```{r}
+#View(hallucinations)
+rf_1 <- randomForest(Professional.Sanction ~ Legal.Field.Primary + country_group + Vendor.Disputed +  ai_tool_group, data = hallucinations_train, importance = TRUE, ntree = 1000)
+rf_1
+importance(rf_1)
+varImpPlot(rf_1)
+```
+Testing different hyperparameters: 
+```{r}
+#View(hallucinations)
+rf_2 <- randomForest(Professional.Sanction ~ Legal.Field.Primary + country_group + Vendor.Disputed +  ai_tool_group, data = hallucinations_train, importance = TRUE, mtry = 1, ntree = 1000)
+rf_2
+importance(rf_2)
+varImpPlot(rf_2)
+```
+```{r}
+#View(hallucinations)
+rf_3 <- randomForest(Professional.Sanction ~ Legal.Field.Primary + country_group + Vendor.Disputed +  ai_tool_group, data = hallucinations_train, importance = TRUE, mtry = 1, ntree = 1000)
+rf_3
+importance(rf_3)
+varImpPlot(rf_3)
+```
+None of these forests classify any sanctioned observations as sanctioned; in fact rf_1 only predicted 2 observations to be predicted sanctioned, and neither were actually sanctioned. Because neither hyperparameter model improved the OOB estimate of error rate much, we will use rf_1. 
+
+```{r}
+rf_predict <-  predict(rf_1, newdata = hallucinations_test)
+table(
+  Predicted = rf_predict,
+  Actual = hallucinations_test$Professional.Sanction
+)
+
+```
+
+
+```{r}
+TP <- 0
+TN<- 380
+FN<- 35
+FP <- 1
+Accuracy <- (TP + TN)/(TP+ TN + FP + FN)
+Sensitivity <- TP/(TP + FN)
+Specificity <- TN/(TN + FP)
+Accuracy
+Sensitivity 
+Specificity
+```
+
+We can see that though the accuracy and the specificity are quite high, the sensitivty is 0. This is because the model essentially predicts No for every observation, since there are so few samples with the value of yes. We can then compare this to the predictive performance of the decision tree. 
+
+```{r}
+tree_predict <- predict(
+  hallucinations_fit,
+  newdata = hallucinations_test,
+  type = "class"
+)
+
+table(
+  Predicted = tree_predict,
+  Actual = hallucinations_test$Professional.Sanction
+)
+
+```
+
+
+```{r}
+TP_dt <- 0
+TN_dt<- 374
+FN_dt<- 35
+FP_dt <- 7
+Accuracy_dt <- (TP_dt + TN_dt)/(TP_dt+ TN_dt + FP_dt + FN_dt)
+Sensitivity_dt <- TP_dt/(TP_dt + FN_dt)
+Specificity_dt <- TN_dt/(TN_dt + FP_dt)
+Accuracy_dt
+Sensitivity_dt
+Specificity_dt
+```
+The decision tree performed worse- the accuracy and specificity decreased and the sensitivity remained at 0. This is because it predicted more Yes values-- but all of them were false positives. We can then check how the decision tree performed on the training data-- perhaps indicating that the individual decision tree overfit to the training data. 
+
+
+```{r}
+tree_train_predict <- predict(
+  hallucinations_fit,
+  newdata = hallucinations_train,
+  type = "class"
+)
+
+table(
+  Predicted = tree_train_predict,
+  Actual = hallucinations_train$Professional.Sanction
+)
+```
+```{r}
+TP_train <- 59
+TN_train<- 1527
+FN_train<- 69
+FP_train <- 7
+Accuracy_train <- (TP_train + TN_train)/(TP_train+ TN_train + FP_train + FN_train)
+Sensitivity_train <- TP_train/(TP_train + FN_train)
+Specificity_train <- TN_train/(TN_train + FP_train)
+Accuracy_train
+Sensitivity_train
+Specificity_train
+```
+
+When using the training data, the Decision Tree performs much better-- most likley because many of the courts only have one observation. Using that to predict data that the model wasn't trained on would not perform well. 
+
+
+\bf{Concluding Thoughts:}
+The variable we selected to predict using Decision Trees and Random Forests was not the right choice. Though an interesting variable, whether a case resulted in professional sanctions or not was not accurately predicted-- The sensitivity was 0 for both the Random Forest and Decision Tree. This is most likely because there was such an imbalance in values for professional sanctions. So few cases resulted in professional sanctions that the best performing model simply predicted no professional sanction for every observation. 
